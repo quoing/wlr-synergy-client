@@ -2,8 +2,6 @@
 
 #define DEBUG_LVL 3
 
-#include <time.h>
-
 #if defined(DEBUG_LVL) && DEBUG_LVL > 0
   #define DEBUG(fmt, args...) fprintf(stderr, "DEBUG: %s:%d:%s(): " fmt "\n", __FILE__, __LINE__, __func__, ##args)
 #else
@@ -26,7 +24,9 @@
 #include <time.h>
 #include <math.h>
 #include <errno.h>
+#include <linux/input.h>
 #include <wayland-client.h>
+#include <wayland-util.h>
 //#include <wayland-client-protocol.h>
 //#include <wayland-input-eventcodes.h>
 #include "virtual-keyboard-unstable-v1-client-protocol.h"
@@ -56,6 +56,7 @@ static struct state {
         int32_t clientWidth;
         int32_t clientHeight;
 
+	int buttons_pressed[3]; // synergy only supports 3 buttons
 } g_state;
 
 int g_cleanup_run=0;
@@ -65,6 +66,9 @@ static const struct wl_registry_listener registry_listener;
 static const struct wl_callback_listener completed_listener;
 
 static void pointer_move_absolute(struct zwlr_virtual_pointer_v1 *vptr, uint32_t x, uint32_t y);
+static void pointer_button(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button, uint16_t state);
+static void pointer_press(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button);
+static void pointer_release(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button);
 
 int 
 timestamp()
@@ -168,6 +172,18 @@ static void clientMouse(uSynergyCookie cookie, uint16_t x, uint16_t y, int16_t w
         DEBUG("mouse: pos: %d %d, wheel: %d %d, buttons: %d %d %d ", x, y, wheelx, wheely, btnLeft, btnRight, btnMid);
         g_state.running = true;
         pointer_move_absolute(g_state.pointer, (uint32_t)x, (uint32_t)y);
+	if (btnLeft != g_state.buttons_pressed[0]) {
+		g_state.buttons_pressed[0] = (btnLeft==0)?WL_POINTER_BUTTON_STATE_RELEASED:WL_POINTER_BUTTON_STATE_PRESSED;
+		pointer_button(g_state.pointer, BTN_LEFT, g_state.buttons_pressed[0]);
+	}
+	if (btnRight != g_state.buttons_pressed[1]) {
+		g_state.buttons_pressed[1] = (btnRight==0)?WL_POINTER_BUTTON_STATE_RELEASED:WL_POINTER_BUTTON_STATE_PRESSED;
+		pointer_button(g_state.pointer, BTN_RIGHT, g_state.buttons_pressed[1]);
+	}
+	if (btnMid != g_state.buttons_pressed[2]) {
+		g_state.buttons_pressed[2] = (btnMid==0)?WL_POINTER_BUTTON_STATE_RELEASED:WL_POINTER_BUTTON_STATE_PRESSED;
+		pointer_button(g_state.pointer, BTN_MIDDLE, g_state.buttons_pressed[2]);
+	}
         struct wl_callback *callback =  wl_display_sync(g_state.display);
         wl_callback_add_listener(callback, &completed_listener, &g_state);
 }
@@ -252,6 +268,26 @@ pointer_move(struct zwlr_virtual_pointer_v1 *vptr, wl_fixed_t dx, wl_fixed_t dy)
                 zwlr_virtual_pointer_v1_frame(vptr);
         }
 }*/
+
+static void pointer_button(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button, uint16_t state)
+{
+	zwlr_virtual_pointer_v1_button(vptr, timestamp(), button, state);
+	zwlr_virtual_pointer_v1_frame(vptr);
+}
+
+
+
+static void pointer_press(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button)
+{
+	zwlr_virtual_pointer_v1_button(vptr, timestamp(), button, WL_POINTER_BUTTON_STATE_PRESSED);
+	zwlr_virtual_pointer_v1_frame(vptr);
+}
+
+static void pointer_release(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button)
+{
+	zwlr_virtual_pointer_v1_button(vptr, timestamp(), button, WL_POINTER_BUTTON_STATE_RELEASED);
+	zwlr_virtual_pointer_v1_frame(vptr);
+}
 
 static void pointer_move_absolute(struct zwlr_virtual_pointer_v1 *vptr, uint32_t x, uint32_t y)
 {
