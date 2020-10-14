@@ -1,0 +1,2 @@
+wlr-synergy-client
+

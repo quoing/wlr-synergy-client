@@ -1,0 +1,3 @@
+[submodule "synergy-micro-client"]
+	path = synergy-micro-client
+	url = https://github.com/quoing/synergy-micro-client.git
