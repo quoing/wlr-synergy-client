@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 199309L
+#define _GNU_SOURCE 
 
 #define DEBUG_LVL 3
 
@@ -24,9 +25,13 @@
 #include <time.h>
 #include <math.h>
 #include <errno.h>
+#include <sys/mman.h>
+#include <linux/memfd.h>
+#include <sys/stat.h>
 #include <linux/input.h>
 #include <wayland-client.h>
 #include <wayland-util.h>
+#include <xkbcommon/xkbcommon.h>
 //#include <wayland-client-protocol.h>
 //#include <wayland-input-eventcodes.h>
 #include "virtual-keyboard-unstable-v1-client-protocol.h"
@@ -34,10 +39,14 @@
 
 #include "synergy-micro-client/uSynergy.h"
 
+#include "keymap.h"
+
 char host[] = "192.168.2.124";
 char port[] = "24800";
 char clientName[] = "PF1ZM3G8";
 short int sock = -1;
+
+//extern const char keymap_ascii_raw[];
 
 static struct state {
         // Globals
@@ -57,6 +66,14 @@ static struct state {
         int32_t clientHeight;
 
 	int buttons_pressed[3]; // synergy only supports 3 buttons
+	int keyboard_pressed[KEY_CNT]; 
+
+	struct xkb_context *xkb_context;
+	struct {
+		uint32_t format;
+		uint32_t size;
+		int fd;
+	} keymap;	
 } g_state;
 
 int g_cleanup_run=0;
@@ -69,6 +86,7 @@ static void pointer_move_absolute(struct zwlr_virtual_pointer_v1 *vptr, uint32_t
 static void pointer_button(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button, uint16_t state);
 static void pointer_press(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button);
 static void pointer_release(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button);
+static void keyboard_button(struct zwp_virtual_keyboard_v1 *kbd, uint32_t keycode, uint32_t state);
 
 int 
 timestamp()
@@ -173,15 +191,15 @@ static void clientMouse(uSynergyCookie cookie, uint16_t x, uint16_t y, int16_t w
         g_state.running = true;
         pointer_move_absolute(g_state.pointer, (uint32_t)x, (uint32_t)y);
 	if (btnLeft != g_state.buttons_pressed[0]) {
-		g_state.buttons_pressed[0] = (btnLeft==0)?WL_POINTER_BUTTON_STATE_RELEASED:WL_POINTER_BUTTON_STATE_PRESSED;
+		g_state.buttons_pressed[0] = (btnLeft==1)?WL_POINTER_BUTTON_STATE_PRESSED:WL_POINTER_BUTTON_STATE_RELEASED;
 		pointer_button(g_state.pointer, BTN_LEFT, g_state.buttons_pressed[0]);
 	}
 	if (btnRight != g_state.buttons_pressed[1]) {
-		g_state.buttons_pressed[1] = (btnRight==0)?WL_POINTER_BUTTON_STATE_RELEASED:WL_POINTER_BUTTON_STATE_PRESSED;
+		g_state.buttons_pressed[1] = (btnRight==1)?WL_POINTER_BUTTON_STATE_PRESSED:WL_POINTER_BUTTON_STATE_RELEASED;
 		pointer_button(g_state.pointer, BTN_RIGHT, g_state.buttons_pressed[1]);
 	}
 	if (btnMid != g_state.buttons_pressed[2]) {
-		g_state.buttons_pressed[2] = (btnMid==0)?WL_POINTER_BUTTON_STATE_RELEASED:WL_POINTER_BUTTON_STATE_PRESSED;
+		g_state.buttons_pressed[2] = (btnMid==1)?WL_POINTER_BUTTON_STATE_PRESSED:WL_POINTER_BUTTON_STATE_RELEASED;
 		pointer_button(g_state.pointer, BTN_MIDDLE, g_state.buttons_pressed[2]);
 	}
         struct wl_callback *callback =  wl_display_sync(g_state.display);
@@ -191,8 +209,49 @@ static void clientMouse(uSynergyCookie cookie, uint16_t x, uint16_t y, int16_t w
 static void clientKeyboard(uSynergyCookie cookie, uint16_t key, uint16_t modifiers, uSynergyBool down, uSynergyBool repeat)
 {
         DEBUG("key: %d, mods: %d, down: %d, repeat: %d", key, modifiers, down, repeat);
+	g_state.keyboard_pressed[key] = (down==1)?WL_KEYBOARD_KEY_STATE_PRESSED:WL_KEYBOARD_KEY_STATE_RELEASED;
+	keyboard_button(g_state.keyboard, key, g_state.keyboard_pressed[key]);
+
+	// MODIFIERS
+	// zwp_virtual_keyboard_v1_modifiers(struct zwp_virtual_keyboard_v1 *zwp_virtual_keyboard_v1, uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked, uint32_t group)
+	// zwp_virtual_keyboard_v1_modifiers(cmd->device, 0, 0, 0, 0);
+	uint32_t wl_modifiers = 0;
+	if (modifiers & USYNERGY_MODIFIER_CAPSLOCK)
+	{
+		//int idx = xkb_keymap_mod_get_index(g_state.keymap, XKB_MOD_NAME_CAPS);
+		DEBUG("Caps-lock ON");
+		//wl_modifiers |= 2;
+	}
+	//zwp_virtual_keyboard_v1_modifiers(g_state.keyboard, wl_modifiers, 0, 0, 0);
+
+	g_state.running = true;
+
+        struct wl_callback *callback =  wl_display_sync(g_state.display);
+        wl_callback_add_listener(callback, &completed_listener, &g_state);
 }
 
+
+static void
+prepare_keymap(struct state *state)
+{
+	//int size = strlen(keymap_ascii_raw) + 1;
+	int size = strlen(keymap_raw) + 1;
+	int fd = memfd_create("keymap", 0);
+	if(ftruncate(fd, size) < 0) {
+		DEBUG("Could not allocate shm for keymap");
+		exit(1);
+	};
+
+	void *keymap_data =
+		mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	//strcpy(keymap_data, keymap_ascii_raw);
+	strcpy(keymap_data, keymap_raw);
+	munmap(keymap_data, size);
+
+	state->keymap.format = WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1;
+	state->keymap.fd = fd;
+	state->keymap.size = size;
+}
 
 static void output_handle_geometry(void *data, struct wl_output *wl_output, int32_t x, int32_t y, int32_t physical_width, int32_t physical_height, int32_t subpixel, const char *make, const char *model, int32_t transform)
 {
@@ -301,7 +360,12 @@ static void pointer_move_absolute(struct zwlr_virtual_pointer_v1 *vptr, uint32_t
         }
 }
 
-static void complete_pointer(void *data, struct wl_callback *callback, uint32_t serial)
+static void keyboard_button(struct zwp_virtual_keyboard_v1 *kbd, uint32_t keycode, uint32_t state)
+{
+	zwp_virtual_keyboard_v1_key(kbd, timestamp(), keycode, state);
+}
+
+static void complete_callback(void *data, struct wl_callback *callback, uint32_t serial)
 {
         struct state *state = data;
         wl_callback_destroy(callback);
@@ -323,7 +387,7 @@ static const struct wl_registry_listener registry_listener = {
 };
 
 static const struct wl_callback_listener completed_listener = {
-        .done = complete_pointer
+        .done = complete_callback
 };
 
 
@@ -392,6 +456,16 @@ int main(void)
 
         assert(g_state.pointer);
         assert(g_state.keyboard);
+
+	prepare_keymap(&g_state);
+
+	g_state.xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+
+	zwp_virtual_keyboard_v1_keymap(g_state.keyboard,
+		g_state.keymap.format, g_state.keymap.fd, g_state.keymap.size
+	);
+	close(g_state.keymap.fd);
+
 
         uSynergyContext ctx;
 

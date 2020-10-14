@@ -19,9 +19,12 @@ add_global_arguments([
                      language: 'c')
 
 cc = meson.get_compiler('c')
-
-wayland_client = cc.find_library('wayland-client', required: false)
-math = cc.find_library('m', required:false)
+#wayland_client = cc.find_library('wayland-client', required: false)
+#wayland_client = cc.find_library('wayland-client', required: false)
+#math = cc.find_library('m', required:false)
+math = cc.find_library('m')
+xkbcommon = dependency('xkbcommon')
+wayland_client = dependency('wayland-client')
 
 includes = include_directories('include')
 
@@ -29,15 +32,21 @@ subdir('protocol')
 
 uSynergy = library('synergy-micro-client', 'synergy-micro-client/uSynergy.c')
 
+src_files = [
+	'wlr-synergy-client.c',
+	#'ascii_raw_keymap.c',
+	]
+
 executable(
 	'wlr-synergy-client', 
-	['wlr-synergy-client.c'],
+	files(src_files),
 	link_with: [uSynergy],
 	include_directories: [includes],
 	dependencies: [
 	  client_protos,
 	  math, 
 	  wayland_client,
+	  xkbcommon,
 	],
 )
 
