@@ -41,6 +41,34 @@
 
 #include "keymap.h"
 
+#define MOD_IDX_SHIFT 0
+#define MOD_IDX_CAPS 1
+#define MOD_IDX_CTRL 2
+#define MOD_IDX_ALT 3
+#define MOD_IDX_NUM 4
+#define MOD_IDX_MOD3 5 
+#define MOD_IDX_LOGO 6
+#define MOD_IDX_ALTGR 7
+#define MOD_IDX_NUMLK 8
+#define MOD_IDX_ALSO_ALT 9
+#define MOD_IDX_LVL3 10
+
+#define MOD_IDX_LALT 11
+#define MOD_IDX_RALT 12
+#define MOD_IDX_RCONTROL 13
+#define MOD_IDX_LCONTROL 14
+
+#define MOD_IDX_SCROLLLK 15
+#define MOD_IDX_LVL5 16
+#define MOD_IDX_ALSO_ALTGR 17
+#define MOD_IDX_META 18
+#define MOD_IDX_SUPER 19
+#define MOD_IDX_HYPER 20
+
+#define MOD_IDX_LAST 21
+
+
+
 char host[] = "192.168.2.124";
 char port[] = "24800";
 char clientName[] = "PF1ZM3G8";
@@ -74,6 +102,7 @@ static struct state {
 		uint32_t size;
 		int fd;
 	} keymap;	
+	struct xkb_keymap *xkb_keymap;
 } g_state;
 
 int g_cleanup_run=0;
@@ -209,6 +238,25 @@ static void clientMouse(uSynergyCookie cookie, uint16_t x, uint16_t y, int16_t w
 static void clientKeyboard(uSynergyCookie cookie, uint16_t key, uint16_t modifiers, uSynergyBool down, uSynergyBool repeat)
 {
         DEBUG("key: %d, mods: %d, down: %d, repeat: %d", key, modifiers, down, repeat);
+	switch (key)
+	{
+		case 284: key = KEY_KPENTER; break;
+		case 285: key = KEY_RIGHTCTRL; break;
+	        case 309: key = KEY_KPSLASH; break;
+	        case 311: key = KEY_SYSRQ; break;
+	        case 327: key = KEY_HOME; break; 
+        	case 328: key = KEY_UP; break;
+        	case 329: key = KEY_PAGEUP; break;
+	        case 331: key = KEY_LEFT; break;
+	        case 333: key = KEY_RIGHT; break;
+	        case 335: key = KEY_END; break;
+	        case 336: key = KEY_DOWN; break;
+	        case 337: key = KEY_PAGEDOWN; break;
+	        case 338: key = KEY_INSERT; break;
+	        case 339: key = KEY_DELETE; break;
+	        case 347: key = KEY_LEFTMETA; break;
+	        case 348: key = KEY_RIGHTMETA; break;
+	}
 	g_state.keyboard_pressed[key] = (down==1)?WL_KEYBOARD_KEY_STATE_PRESSED:WL_KEYBOARD_KEY_STATE_RELEASED;
 	keyboard_button(g_state.keyboard, key, g_state.keyboard_pressed[key]);
 
@@ -219,10 +267,20 @@ static void clientKeyboard(uSynergyCookie cookie, uint16_t key, uint16_t modifie
 	if (modifiers & USYNERGY_MODIFIER_CAPSLOCK)
 	{
 		//int idx = xkb_keymap_mod_get_index(g_state.keymap, XKB_MOD_NAME_CAPS);
-		DEBUG("Caps-lock ON");
+		DEBUG("...................................................Caps-lock pressed");
 		//wl_modifiers |= 2;
 	}
-	//zwp_virtual_keyboard_v1_modifiers(g_state.keyboard, wl_modifiers, 0, 0, 0);
+	if (modifiers & USYNERGY_MODIFIER_SHIFT) 
+	{
+		DEBUG("...................................................Shift pressed");
+		wl_modifiers |= 1<<MOD_IDX_SHIFT;
+	}
+	if (modifiers & USYNERGY_MODIFIER_WIN) 
+	{
+		//DEBUG("...................................................WinKey pressed");
+		wl_modifiers |= 1<<MOD_IDX_SUPER;
+	}
+	zwp_virtual_keyboard_v1_modifiers(g_state.keyboard, wl_modifiers, 0, 0, 0);
 
 	g_state.running = true;
 
@@ -247,7 +305,7 @@ prepare_keymap(struct state *state)
 	//strcpy(keymap_data, keymap_ascii_raw);
 	strcpy(keymap_data, keymap_raw);
 	munmap(keymap_data, size);
-
+	//state->xkb_keymap = xkb_keymap_new_from_buffer(state->xkb_context, keymap_raw, size, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
 	state->keymap.format = WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1;
 	state->keymap.fd = fd;
 	state->keymap.size = size;
@@ -401,9 +459,35 @@ cleanup(void)
         DEBUG("cleanup");
         if (g_cleanup_run < 1)
         {
-                g_cleanup_run = 1;
+		// remove all modifiers
+		DEBUG("Clearing modifiers");
+		zwp_virtual_keyboard_v1_modifiers(g_state.keyboard, 0, 0, 0, 0);
+		for (int i = 0; i < KEY_CNT; i++) {
+			// check pressed keys and "unpress" it
+			if (g_state.keyboard_pressed[i] == WL_KEYBOARD_KEY_STATE_PRESSED) {
+				DEBUG("Key %d marked as pressed, sending release..", i);
+				keyboard_button(g_state.keyboard, i, WL_KEYBOARD_KEY_STATE_RELEASED);
+			}
+
+		}
+		g_state.running = true;
+
+		struct wl_callback *callback =  wl_display_sync(g_state.display);
+		wl_callback_add_listener(callback, &completed_listener, &g_state);
+
+                while (g_state.running)
+                {
+                        DEBUG("Running");
+                        if (wl_display_dispatch(g_state.display) < 0)
+                        {
+                                break;
+                        }
+                }
+		zwlr_virtual_pointer_v1_destroy(g_state.pointer);
+		zwp_virtual_keyboard_v1_destroy(g_state.keyboard);
                 wl_registry_destroy(g_state.registry);
                 wl_display_disconnect(g_state.display);
+                g_cleanup_run = 1;
                 return;
         }
         DEBUG("Cleanup already started once");
