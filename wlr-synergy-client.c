@@ -277,22 +277,14 @@ static void clientKeyboard(uSynergyCookie cookie, uint16_t key, uint16_t modifie
 	// zwp_virtual_keyboard_v1_modifiers(struct zwp_virtual_keyboard_v1 *zwp_virtual_keyboard_v1, uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked, uint32_t group)
 	// zwp_virtual_keyboard_v1_modifiers(cmd->device, 0, 0, 0, 0);
 	uint32_t wl_modifiers = 0;
-	if (modifiers & USYNERGY_MODIFIER_CAPSLOCK)
-	{
-		//int idx = xkb_keymap_mod_get_index(g_state.keymap, XKB_MOD_NAME_CAPS);
-		DEBUG("...................................................Caps-lock pressed");
-		//wl_modifiers |= 2;
-	}
-	if (modifiers & USYNERGY_MODIFIER_SHIFT) 
-	{
-		DEBUG("...................................................Shift pressed");
-		wl_modifiers |= 1<<MOD_IDX_SHIFT;
-	}
-	if (modifiers & USYNERGY_MODIFIER_WIN) 
-	{
-		//DEBUG("...................................................WinKey pressed");
-		wl_modifiers |= 1<<MOD_IDX_SUPER;
-	}
+	if (modifiers & USYNERGY_MODIFIER_CAPSLOCK) { wl_modifiers |= 1<<MOD_IDX_CAPS; }
+	if (modifiers & USYNERGY_MODIFIER_SHIFT) { wl_modifiers |= 1<<MOD_IDX_SHIFT; }
+	if (modifiers & USYNERGY_MODIFIER_WIN) { wl_modifiers |= 1<<MOD_IDX_SUPER; }
+	if (modifiers & USYNERGY_MODIFIER_CTRL) { wl_modifiers |= 1<<MOD_IDX_CTRL; }
+	if (modifiers & USYNERGY_MODIFIER_ALT) { wl_modifiers |= 1<<MOD_IDX_ALT; }
+	if (modifiers & USYNERGY_MODIFIER_ALT_GR) { wl_modifiers |= 1<<MOD_IDX_ALTGR; }
+	if (modifiers & USYNERGY_MODIFIER_NUMLOCK) { wl_modifiers |= 1<<MOD_IDX_NUMLK; }
+	if (modifiers & USYNERGY_MODIFIER_SCROLLOCK) { wl_modifiers |= 1<<MOD_IDX_SCROLLLK; }
 	zwp_virtual_keyboard_v1_modifiers(g_state.keyboard, wl_modifiers, 0, 0, 0);
 
 	g_state.running = true;
