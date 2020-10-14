@@ -95,6 +95,8 @@ static struct state {
 
 	int buttons_pressed[3]; // synergy only supports 3 buttons
 	int keyboard_pressed[KEY_CNT]; 
+	int old_wheel_x;
+	int old_wheel_y;
 
 	struct xkb_context *xkb_context;
 	struct {
@@ -112,6 +114,7 @@ static const struct wl_registry_listener registry_listener;
 static const struct wl_callback_listener completed_listener;
 
 static void pointer_move_absolute(struct zwlr_virtual_pointer_v1 *vptr, uint32_t x, uint32_t y);
+static void pointer_scroll(struct zwlr_virtual_pointer_v1 *vptr, wl_fixed_t dy, wl_fixed_t dx);
 static void pointer_button(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button, uint16_t state);
 static void pointer_press(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button);
 static void pointer_release(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button);
@@ -231,6 +234,16 @@ static void clientMouse(uSynergyCookie cookie, uint16_t x, uint16_t y, int16_t w
 		g_state.buttons_pressed[2] = (btnMid==1)?WL_POINTER_BUTTON_STATE_PRESSED:WL_POINTER_BUTTON_STATE_RELEASED;
 		pointer_button(g_state.pointer, BTN_MIDDLE, g_state.buttons_pressed[2]);
 	}
+
+	wl_fixed_t dx = 0;
+	wl_fixed_t dy = 0;
+	if (g_state.old_wheel_y != wheely) {
+		dy = (g_state.old_wheel_y - wheely) * 20;
+		g_state.old_wheel_y = wheely;
+	}
+	DEBUG("Scrolling: y: %d, x: %d", dy, dx);
+	pointer_scroll(g_state.pointer, dy, 0);
+
         struct wl_callback *callback =  wl_display_sync(g_state.display);
         wl_callback_add_listener(callback, &completed_listener, &g_state);
 }
@@ -416,6 +429,31 @@ static void pointer_move_absolute(struct zwlr_virtual_pointer_v1 *vptr, uint32_t
                 zwlr_virtual_pointer_v1_motion_absolute(vptr, timestamp(), x, y, g_state.clientWidth, g_state.clientHeight);
                 zwlr_virtual_pointer_v1_frame(vptr);
         }
+}
+
+static void pointer_scroll(struct zwlr_virtual_pointer_v1 *vptr, wl_fixed_t dy, wl_fixed_t dx)
+{
+	if (!dx && !dy) {
+		return;
+	}
+	if (dx) {
+		zwlr_virtual_pointer_v1_axis_source(vptr, WL_POINTER_AXIS_SOURCE_FINGER);
+		zwlr_virtual_pointer_v1_axis(vptr, timestamp(), WL_POINTER_AXIS_HORIZONTAL_SCROLL, dx);
+	}
+	if (dy) {
+		zwlr_virtual_pointer_v1_axis_source(vptr, WL_POINTER_AXIS_SOURCE_FINGER);
+		zwlr_virtual_pointer_v1_axis(vptr, timestamp(), WL_POINTER_AXIS_VERTICAL_SCROLL, dy);
+	}
+	zwlr_virtual_pointer_v1_frame(vptr);
+	if (dx) {
+		zwlr_virtual_pointer_v1_axis_source(vptr, WL_POINTER_AXIS_SOURCE_FINGER);
+		zwlr_virtual_pointer_v1_axis_stop(vptr, timestamp(), WL_POINTER_AXIS_HORIZONTAL_SCROLL);
+	}
+	if (dy) {
+		zwlr_virtual_pointer_v1_axis_source(vptr, WL_POINTER_AXIS_SOURCE_FINGER);
+		zwlr_virtual_pointer_v1_axis_stop(vptr, timestamp(), WL_POINTER_AXIS_VERTICAL_SCROLL);
+	}
+	zwlr_virtual_pointer_v1_frame(vptr);
 }
 
 static void keyboard_button(struct zwp_virtual_keyboard_v1 *kbd, uint32_t keycode, uint32_t state)
