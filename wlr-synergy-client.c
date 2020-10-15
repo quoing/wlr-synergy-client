@@ -10,6 +10,10 @@
 #endif
 
 
+#define INFO(fmt, args...) fprintf(stderr,  "[INFO]  :  %s:%d:%s(): " fmt "\n", __FILE__, __LINE__, __func__, ##args)
+#define ERROR(fmt, args...) fprintf(stderr, "[ERROR] : %s:%d:%s(): " fmt "\n", __FILE__, __LINE__, __func__, ##args)
+#define OUT(fmt, args...) fprintf(stderr, "" fmt "\n", ##args)
+#define TRACE(fmt, args...) fprintf(stderr, "[TRACE] : %s:%d:%s(): " fmt "\n", __FILE__, __LINE__, __func__, ##args)
 
 #include <stdio.h>
 #include <assert.h>
@@ -69,16 +73,15 @@
 
 
 
-char host[] = "192.168.2.124";
-char port[] = "24800";
-char clientName[] = "PF1ZM3G8";
+char host[32]="synergy-server";
+char port[8]="24800";
+char clientName[32];
 short int sock = -1;
 
 //extern const char keymap_ascii_raw[];
 
 static struct state {
         // Globals
-        char title[255];
         struct wl_display *display;
         struct wl_registry *registry;
         struct wl_seat *seat;
@@ -133,7 +136,7 @@ timestamp()
 
 void clientTrace(uSynergyCookie cookie, const char *text)
 {
-        DEBUG("Client trace: %s", text);
+        TRACE("Client trace: %s", text);
         //fprintf(stderr, text);
 }
 
@@ -141,7 +144,7 @@ uSynergyBool clientConnect(uSynergyCookie cookie)
 {
         struct sockaddr_in addr;
 
-        DEBUG("Connecting...");
+        INFO("Connecting...");
 
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = inet_addr(host);
@@ -150,7 +153,7 @@ uSynergyBool clientConnect(uSynergyCookie cookie)
         sock = socket(AF_INET, SOCK_STREAM, 0);
 
         if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
-                DEBUG("Connection successfull");
+                INFO("Connection successfull");
                 // set socket non-blocking
                 //int val = fcntl(sock, F_GETFL, 0);
                 //fcntl(sock, F_SETFL, val | O_NONBLOCK);
@@ -300,7 +303,7 @@ static void prepare_keymap(struct state *state)
 	int size = strlen(keymap_raw) + 1;
 	int fd = memfd_create("keymap", 0);
 	if(ftruncate(fd, size) < 0) {
-		DEBUG("Could not allocate shm for keymap");
+		ERROR("Could not allocate shm for keymap");
 		exit(1);
 	};
 
@@ -465,44 +468,52 @@ static const struct wl_callback_listener completed_listener = {
 };
 
 
-
-
-
-
 void cleanup(void)
 {
         DEBUG("cleanup");
         if (g_cleanup_run < 1)
         {
-		// remove all modifiers
-		DEBUG("Clearing modifiers");
-		zwp_virtual_keyboard_v1_modifiers(g_state.keyboard, 0, 0, 0, 0);
+		if (g_state.keyboard != 0) 
+		{
+			// remove all modifiers
+			DEBUG("Clearing modifiers");
+			zwp_virtual_keyboard_v1_modifiers(g_state.keyboard, 0, 0, 0, 0);
 
-		// check pressed keys and "unpress" it
-		for (int i = 0; i < KEY_CNT; i++) {
-			if (g_state.keyboard_pressed[i] == WL_KEYBOARD_KEY_STATE_PRESSED) {
-				DEBUG("Key %d marked as pressed, sending release..", i);
-				keyboard_button(g_state.keyboard, i, WL_KEYBOARD_KEY_STATE_RELEASED);
+			// check pressed keys and "unpress" it
+			for (int i = 0; i < KEY_CNT; i++) {
+				if (g_state.keyboard_pressed[i] == WL_KEYBOARD_KEY_STATE_PRESSED) {
+					DEBUG("Key %d marked as pressed, sending release..", i);
+					keyboard_button(g_state.keyboard, i, WL_KEYBOARD_KEY_STATE_RELEASED);
+				}
+
 			}
+			g_state.running += 1;
 
+			struct wl_callback *callback =  wl_display_sync(g_state.display);
+			wl_callback_add_listener(callback, &completed_listener, &g_state);
+
+			while (g_state.running)
+			{
+				DEBUG("Running");
+				if (wl_display_dispatch(g_state.display) < 0)
+				{
+					break;
+				}
+			}
+			zwp_virtual_keyboard_v1_destroy(g_state.keyboard);
 		}
-		g_state.running += 1;
-
-		struct wl_callback *callback =  wl_display_sync(g_state.display);
-		wl_callback_add_listener(callback, &completed_listener, &g_state);
-
-                while (g_state.running)
-                {
-                        DEBUG("Running");
-                        if (wl_display_dispatch(g_state.display) < 0)
-                        {
-                                break;
-                        }
-                }
-		zwlr_virtual_pointer_v1_destroy(g_state.pointer);
-		zwp_virtual_keyboard_v1_destroy(g_state.keyboard);
-                wl_registry_destroy(g_state.registry);
-                wl_display_disconnect(g_state.display);
+		if (g_state.pointer != 0) 
+		{
+			zwlr_virtual_pointer_v1_destroy(g_state.pointer); 
+		}
+		if ( g_state.registry != 0) 
+		{
+                	wl_registry_destroy(g_state.registry);
+		}
+		if (g_state.display != 0)
+		{
+                	wl_display_disconnect(g_state.display);
+		}
 
 		// free xkb context
 		xkb_context_unref(g_state.xkb_context);
@@ -515,32 +526,87 @@ void cleanup(void)
         return;
 }
 
-void 
-signalIntHandler(int signum)
+void signalIntHandler(int signum)
 {
         exit(0); // just proper exit, to invoke cleanup function
 }
 
-int main(void)
+void usage()
+{
+	OUT("Missing mandatory parameters\n\twrl-synergy-client <IP/host of synergy server> [-p <port>] -c [clientname]\n");
+}
+
+int main(int argc, char *argv[])
 {
         atexit(cleanup);
         signal(SIGINT, signalIntHandler);
 
         DEBUG("wlr_synergy_client starting");
 
+	// fill-in default client name = hostname
+	gethostname(clientName, 31);
+	//printf("Hostname: %s\n", clientName);
+	
+	// arguments
+	if (argc > 1) 
+	{
+		int argpos=1;
+		strncpy(host, argv[1], 31);
+		argpos++;
+		while (argpos < argc)
+		{
+			DEBUG("Reading parameters");
+			if (strcmp("-p", argv[argpos])==0) 
+			{
+				// reading port
+				argpos++;
+				if (argc>=argpos) {
+					strncpy(port, argv[argpos], 7);
+				} else {
+					usage();
+					ERROR("Error: Parameter -p requires port number\n");
+					exit(1);
+				}
+			} else if (strcmp("-c", argv[argpos]) == 0) 
+			{
+				// reading client name
+				argpos++;
+				if (argc>=argpos) {
+                                        strncpy(clientName, argv[argpos], 31);
+                                } else {
+                                        usage();
+                                        ERROR("Error: Parameter -c requires client name\n");
+                                        exit(1);
+				}
+			} else {
+				usage();
+				ERROR("Error: unknown parameter - %s", argv[argpos]);
+				exit(1);
+			}
+			argpos++;
+		}
+	} else { usage(); exit(1); }
+
+	INFO("Hostname: %s", host);
+	INFO("Port: %s", port);
+	INFO("ClientName: %s", clientName);
+
+	
+
+
 	g_state.running = 0;
 
         // getting wayland screensize!
         g_state.display = wl_display_connect(NULL);
         if (g_state.display == NULL) {
-                DEBUG("failed to create display");
+                ERROR("failed to create display");
                 return -1;
         }
         g_state.registry = wl_display_get_registry(g_state.display);
         wl_registry_add_listener(g_state.registry, &registry_listener, &g_state);
 
         wl_display_dispatch(g_state.display);
-        wl_display_roundtrip(g_state.display);
+	wl_display_roundtrip(g_state.display);
 
         // we should have all deviuces (seat, vkbd and vpointer)
         assert(g_state.seat);
