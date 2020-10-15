@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 199309L
 #define _GNU_SOURCE 
 
-#define DEBUG_LVL 3
+#define DEBUG_LVL 0
 
 #if defined(DEBUG_LVL) && DEBUG_LVL > 0
   #define DEBUG(fmt, args...) fprintf(stderr, "DEBUG: %s:%d:%s(): " fmt "\n", __FILE__, __LINE__, __func__, ##args)
@@ -86,7 +86,7 @@ static struct state {
         struct zwlr_foreign_toplevel_manager_v1 *ftl_mgr;
         struct zwlr_virtual_pointer_manager_v1 *vp_mgr;
 
-        bool running;
+        int running;
         void *keyboard;
         void *pointer;
 
@@ -220,7 +220,7 @@ void clientSleep(uSynergyCookie cookie, int ms)
 static void clientMouse(uSynergyCookie cookie, uint16_t x, uint16_t y, int16_t wheelx, int16_t wheely, uSynergyBool btnLeft, uSynergyBool btnRight, uSynergyBool btnMid)
 {
         DEBUG("mouse: pos: %d %d, wheel: %d %d, buttons: %d %d %d ", x, y, wheelx, wheely, btnLeft, btnRight, btnMid);
-        g_state.running = true;
+        g_state.running += 1;
         pointer_move_absolute(g_state.pointer, (uint32_t)x, (uint32_t)y);
 	if (btnLeft != g_state.buttons_pressed[0]) {
 		g_state.buttons_pressed[0] = (btnLeft==1)?WL_POINTER_BUTTON_STATE_PRESSED:WL_POINTER_BUTTON_STATE_RELEASED;
@@ -251,6 +251,7 @@ static void clientMouse(uSynergyCookie cookie, uint16_t x, uint16_t y, int16_t w
 static void clientKeyboard(uSynergyCookie cookie, uint16_t key, uint16_t modifiers, uSynergyBool down, uSynergyBool repeat)
 {
         DEBUG("key: %d, mods: %d, down: %d, repeat: %d", key, modifiers, down, repeat);
+	// some key codes comming from synergy (at least on windows server) are not correctly mapped (need to check with linux server/other windows installation)
 	switch (key)
 	{
 		case 284: key = KEY_KPENTER; break;
@@ -275,7 +276,6 @@ static void clientKeyboard(uSynergyCookie cookie, uint16_t key, uint16_t modifie
 
 	// MODIFIERS
 	// zwp_virtual_keyboard_v1_modifiers(struct zwp_virtual_keyboard_v1 *zwp_virtual_keyboard_v1, uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked, uint32_t group)
-	// zwp_virtual_keyboard_v1_modifiers(cmd->device, 0, 0, 0, 0);
 	uint32_t wl_modifiers = 0;
 	if (modifiers & USYNERGY_MODIFIER_CAPSLOCK) { wl_modifiers |= 1<<MOD_IDX_CAPS; }
 	if (modifiers & USYNERGY_MODIFIER_SHIFT) { wl_modifiers |= 1<<MOD_IDX_SHIFT; }
@@ -287,15 +287,14 @@ static void clientKeyboard(uSynergyCookie cookie, uint16_t key, uint16_t modifie
 	if (modifiers & USYNERGY_MODIFIER_SCROLLOCK) { wl_modifiers |= 1<<MOD_IDX_SCROLLLK; }
 	zwp_virtual_keyboard_v1_modifiers(g_state.keyboard, wl_modifiers, 0, 0, 0);
 
-	g_state.running = true;
+	g_state.running += 1;
 
         struct wl_callback *callback =  wl_display_sync(g_state.display);
         wl_callback_add_listener(callback, &completed_listener, &g_state);
 }
 
 
-static void
-prepare_keymap(struct state *state)
+static void prepare_keymap(struct state *state)
 {
 	//int size = strlen(keymap_ascii_raw) + 1;
 	int size = strlen(keymap_raw) + 1;
@@ -378,27 +377,13 @@ static void global_registry_handler(void *data, struct wl_registry *registry,
 static void global_registry_remover(void *data, struct wl_registry *registry,
                 uint32_t id) {}
 
-/*static void
-pointer_move(struct zwlr_virtual_pointer_v1 *vptr, wl_fixed_t dx, wl_fixed_t dy)
-{
-        DEBUG("dx: %d, dy: %d", dx, dy);
-        if (!dx && !dy) {
-                return;
-        } else {
-
-                zwlr_virtual_pointer_v1_motion(vptr, timestamp(), dx, dy);
-                zwlr_virtual_pointer_v1_frame(vptr);
-        }
-}*/
-
 static void pointer_button(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button, uint16_t state)
 {
 	zwlr_virtual_pointer_v1_button(vptr, timestamp(), button, state);
 	zwlr_virtual_pointer_v1_frame(vptr);
 }
 
-
-
+/*
 static void pointer_press(struct zwlr_virtual_pointer_v1 *vptr, uint32_t button)
 {
 	zwlr_virtual_pointer_v1_button(vptr, timestamp(), button, WL_POINTER_BUTTON_STATE_PRESSED);
@@ -410,6 +395,7 @@ static void pointer_release(struct zwlr_virtual_pointer_v1 *vptr, uint32_t butto
 	zwlr_virtual_pointer_v1_button(vptr, timestamp(), button, WL_POINTER_BUTTON_STATE_RELEASED);
 	zwlr_virtual_pointer_v1_frame(vptr);
 }
+*/ 
 
 static void pointer_move_absolute(struct zwlr_virtual_pointer_v1 *vptr, uint32_t x, uint32_t y)
 {
@@ -457,7 +443,7 @@ static void complete_callback(void *data, struct wl_callback *callback, uint32_t
 {
         struct state *state = data;
         wl_callback_destroy(callback);
-        state->running = false;
+        state->running--;
         //destroy_pointer(state);
         return;
 }
@@ -483,8 +469,7 @@ static const struct wl_callback_listener completed_listener = {
 
 
 
-void
-cleanup(void)
+void cleanup(void)
 {
         DEBUG("cleanup");
         if (g_cleanup_run < 1)
@@ -492,15 +477,16 @@ cleanup(void)
 		// remove all modifiers
 		DEBUG("Clearing modifiers");
 		zwp_virtual_keyboard_v1_modifiers(g_state.keyboard, 0, 0, 0, 0);
+
+		// check pressed keys and "unpress" it
 		for (int i = 0; i < KEY_CNT; i++) {
-			// check pressed keys and "unpress" it
 			if (g_state.keyboard_pressed[i] == WL_KEYBOARD_KEY_STATE_PRESSED) {
 				DEBUG("Key %d marked as pressed, sending release..", i);
 				keyboard_button(g_state.keyboard, i, WL_KEYBOARD_KEY_STATE_RELEASED);
 			}
 
 		}
-		g_state.running = true;
+		g_state.running += 1;
 
 		struct wl_callback *callback =  wl_display_sync(g_state.display);
 		wl_callback_add_listener(callback, &completed_listener, &g_state);
@@ -517,6 +503,11 @@ cleanup(void)
 		zwp_virtual_keyboard_v1_destroy(g_state.keyboard);
                 wl_registry_destroy(g_state.registry);
                 wl_display_disconnect(g_state.display);
+
+		// free xkb context
+		xkb_context_unref(g_state.xkb_context);
+		
+		// finished, prevent another run of cleanup (probably not necessary)
                 g_cleanup_run = 1;
                 return;
         }
@@ -527,7 +518,7 @@ cleanup(void)
 void 
 signalIntHandler(int signum)
 {
-        exit(0);
+        exit(0); // just proper exit, to invoke cleanup function
 }
 
 int main(void)
@@ -536,6 +527,8 @@ int main(void)
         signal(SIGINT, signalIntHandler);
 
         DEBUG("wlr_synergy_client starting");
+
+	g_state.running = 0;
 
         // getting wayland screensize!
         g_state.display = wl_display_connect(NULL);
@@ -554,25 +547,19 @@ int main(void)
         assert(g_state.vkbd_mgr);
         assert(g_state.vp_mgr);
 
-        /*struct output_t *out, *tmp;
-        wl_list_for_each_safe(out, tmp, &wl_ctx.outputs, link) {
-                wl_output_destroy(out->output);
-                wl_list_remove(&out->link);
-                free(out);
-        }*/
-
+	// create virtual mouse and keyboard
         g_state.pointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer(
                 g_state.vp_mgr, g_state.seat
         );
         g_state.keyboard = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(
                 g_state.vkbd_mgr, g_state.seat
         );
-
         assert(g_state.pointer);
         assert(g_state.keyboard);
 
 	prepare_keymap(&g_state);
 
+	// create XKB context (virtual keyboard requires XKB keymap)
 	g_state.xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 
 	zwp_virtual_keyboard_v1_keymap(g_state.keyboard,
@@ -580,14 +567,13 @@ int main(void)
 	);
 	close(g_state.keymap.fd);
 
-
+	// initialize uSynergy
         uSynergyContext ctx;
 
         uSynergyInit(&ctx);
 
         ctx.m_clientName=clientName;
 
-	//DEBUG("Width: %d", g_state.clientWidth);
         ctx.m_clientWidth = g_state.clientWidth;
         ctx.m_clientHeight = g_state.clientHeight;
 
@@ -600,12 +586,14 @@ int main(void)
         ctx.m_mouseCallback=&clientMouse;
         ctx.m_keyboardCallback=&clientKeyboard;
 
+	// is tracing working, no debugs whatsoever
         ctx.m_traceFunc=&clientTrace;
 
+	// main loop, update synergy and dispatch wl events
         while (1) {
                 uSynergyUpdate(&ctx);
 
-                while (g_state.running)
+                while (g_state.running > 0)
                 {
                         DEBUG("Running");
                         if (wl_display_dispatch(g_state.display) < 0)
