@@ -108,6 +108,7 @@ static struct state {
 		int fd;
 	} keymap;	
 	struct xkb_keymap *xkb_keymap;
+	struct xkb_state *xkb_state;
 } g_state;
 
 int g_cleanup_run=0;
@@ -254,6 +255,7 @@ static void clientMouse(uSynergyCookie cookie, uint16_t x, uint16_t y, int16_t w
 static void clientKeyboard(uSynergyCookie cookie, uint16_t key, uint16_t modifiers, uSynergyBool down, uSynergyBool repeat)
 {
         DEBUG("key: %d, mods: %d, down: %d, repeat: %d", key, modifiers, down, repeat);
+
 	// some key codes comming from synergy (at least on windows server) are not correctly mapped (need to check with linux server/other windows installation)
 	switch (key)
 	{
@@ -274,21 +276,45 @@ static void clientKeyboard(uSynergyCookie cookie, uint16_t key, uint16_t modifie
 	        case 347: key = KEY_LEFTMETA; break;
 	        case 348: key = KEY_RIGHTMETA; break;
 	}
+
+        char buf[128];
+        uint32_t keycode = key + 8;
+        xkb_keysym_t sym = xkb_state_key_get_one_sym(
+                      g_state.xkb_state, keycode);
+        xkb_keysym_get_name(sym, buf, sizeof(buf));
+        const char *action =
+                down == 1 ? "press" : "release";
+        fprintf(stderr, "key %s: sym: %-12s (%d), ", action, buf, sym);
+        xkb_state_key_get_utf8(g_state.xkb_state, keycode,
+                       buf, sizeof(buf));
+        fprintf(stderr, "utf8: '%s'\n", buf);
+
 	g_state.keyboard_pressed[key] = (down==1)?WL_KEYBOARD_KEY_STATE_PRESSED:WL_KEYBOARD_KEY_STATE_RELEASED;
 	keyboard_button(g_state.keyboard, key, g_state.keyboard_pressed[key]);
 
 	// MODIFIERS
 	// zwp_virtual_keyboard_v1_modifiers(struct zwp_virtual_keyboard_v1 *zwp_virtual_keyboard_v1, uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked, uint32_t group)
 	uint32_t wl_modifiers = 0;
-	if (modifiers & USYNERGY_MODIFIER_CAPSLOCK) { wl_modifiers |= 1<<MOD_IDX_CAPS; }
+	uint32_t wl_latched = 0;
+	uint32_t wl_locked = 0;
+	if (modifiers & USYNERGY_MODIFIER_CAPSLOCK) { wl_locked |= 1<<MOD_IDX_CAPS; }
 	if (modifiers & USYNERGY_MODIFIER_SHIFT) { wl_modifiers |= 1<<MOD_IDX_SHIFT; }
 	if (modifiers & USYNERGY_MODIFIER_WIN) { wl_modifiers |= 1<<MOD_IDX_SUPER; }
+	if (modifiers & USYNERGY_MODIFIER_WIN) { 
+		int idx = xkb_keymap_mod_get_index(g_state.xkb_keymap, XKB_MOD_NAME_LOGO);
+		wl_modifiers |= 1<<idx;
+		//wl_latched |= 1<<idx;
+		//wl_locked |= 1<<idx;
+		/*char * modname;
+		modname = xkb_keymap_mod_get_name(g_state.xkb_keymap, idx);
+		fprintf(stderr, "mod: '%s'\n", modname);*/
+	}
 	if (modifiers & USYNERGY_MODIFIER_CTRL) { wl_modifiers |= 1<<MOD_IDX_CTRL; }
 	if (modifiers & USYNERGY_MODIFIER_ALT) { wl_modifiers |= 1<<MOD_IDX_ALT; }
 	if (modifiers & USYNERGY_MODIFIER_ALT_GR) { wl_modifiers |= 1<<MOD_IDX_ALTGR; }
-	if (modifiers & USYNERGY_MODIFIER_NUMLOCK) { wl_modifiers |= 1<<MOD_IDX_NUMLK; }
-	if (modifiers & USYNERGY_MODIFIER_SCROLLOCK) { wl_modifiers |= 1<<MOD_IDX_SCROLLLK; }
-	zwp_virtual_keyboard_v1_modifiers(g_state.keyboard, wl_modifiers, 0, 0, 0);
+	if (modifiers & USYNERGY_MODIFIER_NUMLOCK) { wl_locked |= 1<<MOD_IDX_NUMLK; }
+	if (modifiers & USYNERGY_MODIFIER_SCROLLOCK) { wl_locked |= 1<<MOD_IDX_SCROLLLK; }
+	zwp_virtual_keyboard_v1_modifiers(g_state.keyboard, wl_modifiers, wl_latched, wl_locked, 0);
 
 	g_state.running += 1;
 
@@ -311,8 +337,11 @@ static void prepare_keymap(struct state *state)
 		mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	//strcpy(keymap_data, keymap_ascii_raw);
 	strcpy(keymap_data, keymap_raw);
+
+	state->xkb_keymap = xkb_keymap_new_from_string(state->xkb_context, keymap_data, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+	state->xkb_state = xkb_state_new(state->xkb_keymap);
+
 	munmap(keymap_data, size);
-	//state->xkb_keymap = xkb_keymap_new_from_buffer(state->xkb_context, keymap_raw, size, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
 	state->keymap.format = WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1;
 	state->keymap.fd = fd;
 	state->keymap.size = size;
@@ -623,10 +652,10 @@ int main(int argc, char *argv[])
         assert(g_state.pointer);
         assert(g_state.keyboard);
 
-	prepare_keymap(&g_state);
-
 	// create XKB context (virtual keyboard requires XKB keymap)
 	g_state.xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+
+	prepare_keymap(&g_state);
 
 	zwp_virtual_keyboard_v1_keymap(g_state.keyboard,
 		g_state.keymap.format, g_state.keymap.fd, g_state.keymap.size
