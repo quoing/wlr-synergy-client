@@ -277,7 +277,7 @@ static void clientKeyboard(uSynergyCookie cookie, uint16_t key, uint16_t modifie
 	        case 348: key = KEY_RIGHTMETA; break;
 	}
 
-        char buf[128];
+        /*char buf[128];
         uint32_t keycode = key + 8;
         xkb_keysym_t sym = xkb_state_key_get_one_sym(
                       g_state.xkb_state, keycode);
@@ -287,7 +287,7 @@ static void clientKeyboard(uSynergyCookie cookie, uint16_t key, uint16_t modifie
         fprintf(stderr, "key %s: sym: %-12s (%d), ", action, buf, sym);
         xkb_state_key_get_utf8(g_state.xkb_state, keycode,
                        buf, sizeof(buf));
-        fprintf(stderr, "utf8: '%s'\n", buf);
+        fprintf(stderr, "utf8: '%s'\n", buf);*/
 
 	g_state.keyboard_pressed[key] = (down==1)?WL_KEYBOARD_KEY_STATE_PRESSED:WL_KEYBOARD_KEY_STATE_RELEASED;
 	keyboard_button(g_state.keyboard, key, g_state.keyboard_pressed[key]);
