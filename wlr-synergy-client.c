@@ -384,7 +384,7 @@ static void global_registry_handler(void *data, struct wl_registry *registry,
                 output->wl_ctx = wl_ctx;
                 output->id = id;*/
                 //output->output =
-                struct wl_output *output = wl_registry_bind(registry, id, &wl_output_interface, 2);
+                struct wl_output *output = wl_registry_bind(registry, id, &wl_output_interface, 3);
                 //wl_list_insert(&wl_ctx->outputs, &output->link);
                 wl_output_add_listener(output, &output_listener, &g_state);
         }
